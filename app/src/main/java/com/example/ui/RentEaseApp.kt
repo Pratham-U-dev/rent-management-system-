@@ -1197,12 +1197,13 @@ fun BillsHistoryScreen(
                                 SuggestionChip(
                                     onClick = {
                                         val nextStatus = if (isPaid) "PENDING" else "PAID"
-                                        viewModel.updatePaymentStatus(bill, nextStatus, if (nextStatus == "PAID") bill.calculatedTotalAmount else 0.0)
+                                        viewModel.updatePaymentStatus(bill, nextStatus, 0.0)
                                     },
                                     label = { Text(bill.paymentStatus) },
                                     colors = SuggestionChipDefaults.suggestionChipColors(
-                                        labelColor = if (isPaid) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error,
+                                        labelColor = if (isPaid) MaterialTheme.colorScheme.primary else if (bill.paymentStatus == "PARTIAL") MaterialTheme.colorScheme.tertiary else MaterialTheme.colorScheme.error,
                                         containerColor = if (isPaid) MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.3f)
+                                        else if (bill.paymentStatus == "PARTIAL") MaterialTheme.colorScheme.tertiaryContainer.copy(alpha = 0.3f)
                                         else MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.3f)
                                     )
                                 )
@@ -1824,6 +1825,12 @@ fun AddEditBillScreen(
 
         Spacer(modifier = Modifier.height(20.dp))
 
+        val finalTotal = (viewModel.billFormRent.toDoubleOrNull() ?: 0.0) +
+                liveElecBreakdown.finalElectricityAmount +
+                liveWaterBreakdown.finalWaterAmount +
+                (viewModel.billFormMaintenance.toDoubleOrNull() ?: 0.0) +
+                (viewModel.billFormOtherCharges.toDoubleOrNull() ?: 0.0)
+
         // LIVE CALCULATION TRANSPARENCIES ENGINE BREAKDOWN
         Card(
             colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.05f)),
@@ -1898,12 +1905,6 @@ fun AddEditBillScreen(
                 Divider(color = MaterialTheme.colorScheme.primary, thickness = 1.dp)
                 Spacer(modifier = Modifier.height(8.dp))
 
-                val finalTotal = (viewModel.billFormRent.toDoubleOrNull() ?: 0.0) +
-                        liveElecBreakdown.finalElectricityAmount +
-                        liveWaterBreakdown.finalWaterAmount +
-                        (viewModel.billFormMaintenance.toDoubleOrNull() ?: 0.0) +
-                        (viewModel.billFormOtherCharges.toDoubleOrNull() ?: 0.0)
-
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,
@@ -1927,25 +1928,219 @@ fun AddEditBillScreen(
 
         Spacer(modifier = Modifier.height(20.dp))
 
-        // Payment status choices
+        val prevPending = viewModel.getPreviousPendingDues(viewModel.billFormTenantId, viewModel.billFormMonth)
+        val totalOutstanding = finalTotal + prevPending
+
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+            shape = RoundedCornerShape(16.dp)
+        ) {
+            Column(modifier = Modifier.padding(16.dp)) {
+                Text(
+                    "LEDGER BALANCE DETAILS (CARRY-FORWARD)",
+                    style = MaterialTheme.typography.labelSmall,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.primary,
+                    letterSpacing = 0.5.sp
+                )
+                Spacer(modifier = Modifier.height(12.dp))
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Text("Current Month Charges:", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text("${settings.currencySymbol}${String.format("%.2f", finalTotal)}", style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.SemiBold)
+                }
+
+                Spacer(modifier = Modifier.height(6.dp))
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Text("Previous Pending Due (+):", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text(
+                        text = if (prevPending > 0) "${settings.currencySymbol}${String.format("%.2f", prevPending)}" else "Nil / No dues",
+                        style = MaterialTheme.typography.bodySmall,
+                        fontWeight = FontWeight.SemiBold,
+                        color = if (prevPending > 0) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(8.dp))
+                Divider(color = MaterialTheme.colorScheme.outlineVariant)
+                Spacer(modifier = Modifier.height(8.dp))
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text("Total Outstanding Balance:", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onSurface)
+                    Text(
+                        "${settings.currencySymbol}${String.format("%.2f", totalOutstanding)}",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.ExtraBold,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                }
+            }
+        }
+
+        Spacer(modifier = Modifier.height(20.dp))
+
+        Text(
+            "5. Record Tenant Payment Received",
+            style = MaterialTheme.typography.titleSmall,
+            fontWeight = FontWeight.Bold,
+            color = MaterialTheme.colorScheme.primary
+        )
+
+        Spacer(modifier = Modifier.height(8.dp))
+
+        OutlinedTextField(
+            value = viewModel.billFormPaidAmount,
+            onValueChange = { 
+                viewModel.billFormPaidAmount = it
+                // Auto calculate status from text input
+                val paid = it.toDoubleOrNull() ?: 0.0
+                viewModel.billFormPaymentStatus = when {
+                    paid >= totalOutstanding -> "PAID"
+                    paid > 0.0 -> "PARTIAL"
+                    else -> "PENDING"
+                }
+            },
+            label = { Text("Amount Paid (${settings.currencySymbol})") },
+            placeholder = { Text("0.00") },
+            keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
+                keyboardType = androidx.compose.ui.text.input.KeyboardType.Number
+            ),
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth().testTag("bill_paid_input")
+        )
+
+        Spacer(modifier = Modifier.height(8.dp))
+
+        // Quick action payment chip helpers
         Row(
             modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(16.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Text("Initial Status:", style = MaterialTheme.typography.titleSmall)
-            
-            FilterChip(
-                selected = viewModel.billFormPaymentStatus == "PENDING",
-                onClick = { viewModel.billFormPaymentStatus = "PENDING" },
-                label = { Text("PENDING") }
+            InputChip(
+                selected = (viewModel.billFormPaidAmount.toDoubleOrNull() ?: 0.0) == 0.0,
+                onClick = {
+                    viewModel.billFormPaidAmount = "0"
+                    viewModel.billFormPaymentStatus = "PENDING"
+                },
+                label = { Text("No Pay (₹0)") }
             )
 
-            FilterChip(
-                selected = viewModel.billFormPaymentStatus == "PAID",
-                onClick = { viewModel.billFormPaymentStatus = "PAID" },
-                label = { Text("PAID") }
+            InputChip(
+                selected = (viewModel.billFormPaidAmount.toDoubleOrNull() ?: 0.0) == finalTotal,
+                onClick = {
+                    viewModel.billFormPaidAmount = String.format(Locale.US, "%.2f", finalTotal)
+                    viewModel.billFormPaymentStatus = if (finalTotal >= totalOutstanding) "PAID" else "PARTIAL"
+                },
+                label = { Text("Current month only") }
             )
+
+            if (prevPending > 0) {
+                InputChip(
+                    selected = (viewModel.billFormPaidAmount.toDoubleOrNull() ?: 0.0) == totalOutstanding,
+                    onClick = {
+                        viewModel.billFormPaidAmount = String.format(Locale.US, "%.2f", totalOutstanding)
+                        viewModel.billFormPaymentStatus = "PAID"
+                    },
+                    label = { Text("Outstanding (Full)") }
+                )
+            }
+        }
+
+        Spacer(modifier = Modifier.height(16.dp))
+
+        Text("Payment Mode Received:", style = MaterialTheme.typography.titleSmall)
+        Spacer(modifier = Modifier.height(6.dp))
+
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            val modes = listOf("Cash", "UPI", "Bank Transfer", "Other")
+            modes.forEach { mode ->
+                FilterChip(
+                    selected = viewModel.billFormPaymentMethod == mode,
+                    onClick = { viewModel.billFormPaymentMethod = mode },
+                    label = { Text(mode) },
+                    modifier = Modifier.testTag("mode_${mode.lowercase().replace(" ", "_")}")
+                )
+            }
+        }
+
+        Spacer(modifier = Modifier.height(16.dp))
+
+        // Dynamic Payment info banner
+        val currentPaid = viewModel.billFormPaidAmount.toDoubleOrNull() ?: 0.0
+        val remainingDue = if (totalOutstanding > currentPaid) totalOutstanding - currentPaid else 0.0
+
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(12.dp))
+                .background(
+                    when {
+                        remainingDue == 0.0 -> MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.25f)
+                        currentPaid > 0.0 -> MaterialTheme.colorScheme.tertiaryContainer.copy(alpha = 0.2f)
+                        else -> MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.15f)
+                    }
+                )
+                .padding(12.dp)
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(
+                    imageVector = when {
+                        remainingDue == 0.0 -> Icons.Default.CheckCircle
+                        currentPaid > 0.0 -> Icons.Default.Info
+                        else -> Icons.Default.Warning
+                    },
+                    contentDescription = null,
+                    tint = when {
+                        remainingDue == 0.0 -> MaterialTheme.colorScheme.primary
+                        currentPaid > 0.0 -> MaterialTheme.colorScheme.tertiary
+                        else -> MaterialTheme.colorScheme.error
+                    }
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                Column {
+                    Text(
+                        text = when {
+                            remainingDue == 0.0 -> "FULLY PAID"
+                            currentPaid > 0.0 -> "PARTIALLY PAID"
+                            else -> "UNPAID BILL"
+                        },
+                        style = MaterialTheme.typography.labelSmall,
+                        fontWeight = FontWeight.Bold,
+                        color = when {
+                            remainingDue == 0.0 -> MaterialTheme.colorScheme.primary
+                            currentPaid > 0.0 -> MaterialTheme.colorScheme.tertiary
+                            else -> MaterialTheme.colorScheme.error
+                        }
+                    )
+                    Text(
+                        text = when {
+                            remainingDue == 0.0 -> "Full outstanding balance cleared! Status is PAID."
+                            currentPaid > 0.0 -> "Remaining balance ${settings.currencySymbol}${String.format("%.2f", remainingDue)} will be automatically carried forward to next month's bill."
+                            else -> "Full amount of ${settings.currencySymbol}${String.format("%.2f", remainingDue)} will be carried forward as pending dues."
+                        },
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
         }
 
         Spacer(modifier = Modifier.height(24.dp))
@@ -2034,6 +2229,14 @@ fun BillDetailsScreen(
     val isPaid = bill.paymentStatus == "PAID"
     val df = remember { DecimalFormat("#,##,##0.00") }
 
+    var showPaymentDialog by remember { mutableStateOf(false) }
+    var dialogAmountPaid by remember { mutableStateOf("") }
+    var dialogPaymentMethod by remember { mutableStateOf("Cash") }
+    var dialogNotes by remember { mutableStateOf("") }
+
+    val prevPending = viewModel.getPreviousPendingDues(bill.tenantId, bill.billMonth)
+    val totalOutstanding = bill.calculatedTotalAmount + prevPending
+
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -2059,16 +2262,19 @@ fun BillDetailsScreen(
                 fontWeight = FontWeight.Bold
             )
 
-            // Status chip
+            // Status chip (taps to log/modify the payment directly)
             SuggestionChip(
                 onClick = {
-                    val nextStatus = if (isPaid) "PENDING" else "PAID"
-                    viewModel.updatePaymentStatus(bill, nextStatus, if (nextStatus == "PAID") bill.calculatedTotalAmount else 0.0)
+                    dialogAmountPaid = if (bill.paidAmount > 0.0) String.format(Locale.US, "%.2f", bill.paidAmount) else ""
+                    dialogPaymentMethod = bill.paymentMethod
+                    dialogNotes = bill.notes
+                    showPaymentDialog = true
                 },
                 label = { Text(bill.paymentStatus) },
                 colors = SuggestionChipDefaults.suggestionChipColors(
-                    labelColor = if (isPaid) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error,
+                    labelColor = if (isPaid) MaterialTheme.colorScheme.primary else if (bill.paymentStatus == "PARTIAL") MaterialTheme.colorScheme.tertiary else MaterialTheme.colorScheme.error,
                     containerColor = if (isPaid) MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.25f)
+                    else if (bill.paymentStatus == "PARTIAL") MaterialTheme.colorScheme.tertiaryContainer.copy(alpha = 0.25f)
                     else MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.25f)
                 ),
                 modifier = Modifier.testTag("receipt_status_tog")
@@ -2235,22 +2441,59 @@ fun BillDetailsScreen(
                 Divider(color = MaterialTheme.colorScheme.primary, thickness = 1.5.dp)
                 Spacer(modifier = Modifier.height(16.dp))
 
-                // Grand total net payable
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
+                val paidValue = bill.paidAmount
+                val remainingDue = if (totalOutstanding > paidValue) totalOutstanding - paidValue else 0.0
+
+                Text(
+                    "BALANCE & PAYMENT SUMMARY",
+                    style = MaterialTheme.typography.labelSmall,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.primary,
+                    letterSpacing = 0.5.sp
+                )
+                Spacer(modifier = Modifier.height(12.dp))
+
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.25f), RoundedCornerShape(12.dp))
+                        .padding(14.dp)
                 ) {
-                    Column {
-                        Text("TOTAL AMOUNT PAYABLE", style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
-                        Text(bill.paymentStatus, style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.Bold, color = if (isPaid) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error)
+                    DetailSettlementRow("Current Month Charges", bill.calculatedTotalAmount, currency, df)
+                    DetailSettlementRow("Previous Pending Carry-over (+)", prevPending, currency, df, highlightColor = if (prevPending > 0) MaterialTheme.colorScheme.error else null)
+                    
+                    Spacer(modifier = Modifier.height(6.dp))
+                    Divider(color = MaterialTheme.colorScheme.outlineVariant)
+                    Spacer(modifier = Modifier.height(6.dp))
+                    
+                    DetailSettlementRow("Total Outstanding Balance", totalOutstanding, currency, df, isBold = true)
+                    DetailSettlementRow("Total Paid Amount (-)", paidValue, currency, df, highlightColor = if (paidValue > 0) MaterialTheme.colorScheme.primary else null)
+
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Divider(color = MaterialTheme.colorScheme.primary, thickness = 1.5.dp)
+                    Spacer(modifier = Modifier.height(8.dp))
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column {
+                            Text("NET REMAINING DUE", style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.ExtraBold, color = if (remainingDue > 0) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary)
+                            Text(
+                                text = if (remainingDue == 0.0) "Cleared (${bill.paymentMethod})" else "Status: ${bill.paymentStatus} (${bill.paymentMethod})",
+                                style = MaterialTheme.typography.bodySmall,
+                                fontWeight = FontWeight.Medium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        Text(
+                            text = "$currency${df.format(remainingDue)}",
+                            style = MaterialTheme.typography.titleLarge,
+                            fontWeight = FontWeight.ExtraBold,
+                            color = if (remainingDue > 0) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary
+                        )
                     }
-                    Text(
-                        text = "$currency${df.format(bill.calculatedTotalAmount)}",
-                        style = MaterialTheme.typography.headlineMedium,
-                        fontWeight = FontWeight.ExtraBold,
-                        color = MaterialTheme.colorScheme.primary
-                    )
                 }
 
                 if (bill.notes.isNotBlank()) {
@@ -2272,6 +2515,85 @@ fun BillDetailsScreen(
                     }
                 }
             }
+        }
+
+        if (showPaymentDialog) {
+            AlertDialog(
+                onDismissRequest = { showPaymentDialog = false },
+                title = { Text("Update Payment Log", fontWeight = FontWeight.Bold) },
+                text = {
+                    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                        Text(
+                            text = "Record how much the tenant has paid towards the total outstanding (${currency}${df.format(totalOutstanding)}).",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        OutlinedTextField(
+                            value = dialogAmountPaid,
+                            onValueChange = { dialogAmountPaid = it },
+                            label = { Text("Amount Paid ($currency)") },
+                            singleLine = true,
+                            keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
+                                keyboardType = androidx.compose.ui.text.input.KeyboardType.Number
+                            ),
+                            modifier = Modifier.fillMaxWidth().testTag("dialog_paid_input")
+                        )
+                        
+                        Text("Payment Mode:", style = MaterialTheme.typography.titleSmall)
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            val modes = listOf("Cash", "UPI", "Bank Transfer", "Other")
+                            modes.forEach { mode ->
+                                FilterChip(
+                                    selected = dialogPaymentMethod == mode,
+                                    onClick = { dialogPaymentMethod = mode },
+                                    label = { Text(mode) }
+                                )
+                            }
+                        }
+
+                        OutlinedTextField(
+                            value = dialogNotes,
+                            onValueChange = { dialogNotes = it },
+                            label = { Text("Notes") },
+                            placeholder = { Text("e.g. UPI ref #8294") },
+                            singleLine = true,
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                    }
+                },
+                confirmButton = {
+                    TextButton(
+                        onClick = {
+                            val paidAmt = dialogAmountPaid.toDoubleOrNull() ?: 0.0
+                            val updatedStatus = when {
+                                paidAmt >= totalOutstanding -> "PAID"
+                                paidAmt > 0.0 -> "PARTIAL"
+                                else -> "PENDING"
+                            }
+                            
+                            viewModel.updateBillPaymentDetails(
+                                bill = bill,
+                                status = updatedStatus,
+                                paidAmt = paidAmt,
+                                method = dialogPaymentMethod,
+                                notes = dialogNotes
+                            )
+                            showPaymentDialog = false
+                        },
+                        modifier = Modifier.testTag("dialog_paid_confirm")
+                    ) {
+                        Text("Save Ledger Record")
+                    }
+                },
+                dismissButton = {
+                    TextButton(onClick = { showPaymentDialog = false }) {
+                        Text("Cancel")
+                    }
+                }
+            )
         }
 
         Spacer(modifier = Modifier.height(20.dp))
@@ -2542,5 +2864,35 @@ fun SettingsScreen(
             Spacer(modifier = Modifier.width(8.dp))
             Text("Confirm System Rules")
         }
+    }
+}
+
+@Composable
+fun DetailSettlementRow(
+    label: String,
+    amount: Double,
+    currency: String,
+    df: java.text.DecimalFormat,
+    isBold: Boolean = false,
+    highlightColor: androidx.compose.ui.graphics.Color? = null
+) {
+    Row(
+        modifier = androidx.compose.ui.Modifier
+            .fillMaxWidth()
+            .padding(vertical = 3.dp),
+        horizontalArrangement = Arrangement.SpaceBetween
+    ) {
+        Text(
+            text = label,
+            style = MaterialTheme.typography.bodySmall,
+            fontWeight = if (isBold) FontWeight.Bold else FontWeight.Normal,
+            color = if (isBold) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        Text(
+            text = "$currency${df.format(amount)}",
+            style = MaterialTheme.typography.bodySmall,
+            fontWeight = if (isBold || highlightColor != null) FontWeight.Bold else FontWeight.SemiBold,
+            color = highlightColor ?: MaterialTheme.colorScheme.onSurface
+        )
     }
 }

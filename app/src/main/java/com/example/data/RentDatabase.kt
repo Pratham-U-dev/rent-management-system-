@@ -11,7 +11,7 @@ import kotlinx.coroutines.launch
 
 @Database(
     entities = [Tenant::class, MonthlyBill::class, AppSettings::class],
-    version = 1,
+    version = 2,
     exportSchema = false
 )
 abstract class RentDatabase : RoomDatabase() {
@@ -28,6 +28,7 @@ abstract class RentDatabase : RoomDatabase() {
                     RentDatabase::class.java,
                     "rentease_database"
                 )
+                .fallbackToDestructiveMigration()
                 .addCallback(DatabaseCallback(scope))
                 .build()
                 INSTANCE = instance

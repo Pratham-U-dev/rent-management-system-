@@ -27,10 +27,26 @@ class RentViewModel(private val repository: RentRepository) : ViewModel() {
     val settings: StateFlow<AppSettings> = repository.settings
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), AppSettings())
 
-    val totalRentCollected: StateFlow<Double> = repository.totalRentCollected
+    val totalRentCollected: StateFlow<Double> = bills
+        .map { list -> list.sumOf { it.paidAmount } }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), 0.0)
 
-    val pendingPayments: StateFlow<Double> = repository.pendingPayments
+    val pendingPayments: StateFlow<Double> = bills
+        .map { list ->
+            val grouped = list.groupBy { it.tenantId }
+            var totalPending = 0.0
+            for ((tenantId, tenantBills) in grouped) {
+                val summaries = getPaymentSummariesForTenant(tenantId, list)
+                val latestBill = tenantBills.maxByOrNull { it.billMonth }
+                if (latestBill != null) {
+                    val summary = summaries[latestBill.id]
+                    if (summary != null) {
+                        totalPending += summary.remainingDue
+                    }
+                }
+            }
+            totalPending
+        }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), 0.0)
 
     // --- UI Navigation State ---
@@ -186,6 +202,7 @@ class RentViewModel(private val repository: RentRepository) : ViewModel() {
     var billFormNotes by mutableStateOf("")
     var billFormPaidAmount by mutableStateOf("0")
     var billFormPaymentStatus by mutableStateOf("PENDING")
+    var billFormPaymentMethod by mutableStateOf("Cash") // Cash, UPI, Bank Transfer, Other
 
     fun initBillForm(bill: MonthlyBill? = null) {
         val cal = Calendar.getInstance()
@@ -218,6 +235,7 @@ class RentViewModel(private val repository: RentRepository) : ViewModel() {
             billFormNotes = bill.notes
             billFormPaidAmount = bill.paidAmount.toString()
             billFormPaymentStatus = bill.paymentStatus
+            billFormPaymentMethod = bill.paymentMethod
         } else {
             val appSettings = settings.value
             billFormId = null
@@ -246,6 +264,7 @@ class RentViewModel(private val repository: RentRepository) : ViewModel() {
             billFormNotes = ""
             billFormPaidAmount = "0"
             billFormPaymentStatus = "PENDING"
+            billFormPaymentMethod = "Cash"
             
             // Auto fill based on first tenant if available
             if (billFormTenantId != 0L) {
@@ -335,7 +354,7 @@ class RentViewModel(private val repository: RentRepository) : ViewModel() {
             val persons = tenant?.numberOfPersons ?: 1
             val activeCount = tenants.value.filter { it.isActive }.size
             
-            // Build the bill
+            // Build the initial draft bill
             val tempBill = MonthlyBill(
                 id = billFormId ?: 0,
                 tenantId = billFormTenantId,
@@ -361,26 +380,41 @@ class RentViewModel(private val repository: RentRepository) : ViewModel() {
                 divideOnlyEnergyCharges = billFormDivideOnlyEnergy,
                 manualOverrideAmount = billFormManualOverrideElec.toDoubleOrNull() ?: 0.0,
                 notes = billFormNotes,
-                paidAmount = if (billFormPaymentStatus == "PAID") {
-                    // autofill total calculated amount
-                    0.0
-                } else {
-                    billFormPaidAmount.toDoubleOrNull() ?: 0.0
-                },
-                paymentStatus = billFormPaymentStatus,
-                paymentDate = if (billFormPaymentStatus == "PAID") System.currentTimeMillis() else null
+                paidAmount = 0.0, // Calculated below
+                paymentStatus = "PENDING", // Calculated below
+                paymentDate = null,
+                paymentMethod = billFormPaymentMethod
             )
 
-            // Dynamic final calculations
+            // Dynamic current month calculations
             val elec = CalculationsEngine.calculateElectricity(tempBill, persons, s.defaultElectricityTaxPercent)
             val water = CalculationsEngine.calculateWater(tempBill, persons, activeCount)
-            val total = tempBill.rentAmount + elec.finalElectricityAmount + water.finalWaterAmount + tempBill.otherCharges + tempBill.maintenanceCharges
+            val currentCharges = tempBill.rentAmount + elec.finalElectricityAmount + water.finalWaterAmount + tempBill.otherCharges + tempBill.maintenanceCharges
+
+            // Calculate historical carry-overs
+            val prevPending = getPreviousPendingDues(billFormTenantId, billFormMonth)
+            val totalOutstanding = currentCharges + prevPending
+
+            // Formulate what was paid and the corresponding status
+            val calculatedPaidAmount = if (billFormPaymentStatus == "PAID") {
+                totalOutstanding
+            } else {
+                billFormPaidAmount.toDoubleOrNull() ?: 0.0
+            }
+
+            val calculatedStatus = when {
+                calculatedPaidAmount >= totalOutstanding -> "PAID"
+                calculatedPaidAmount > 0.0 -> "PARTIAL"
+                else -> "PENDING"
+            }
 
             val finalBill = tempBill.copy(
                 calculatedTenantElectricity = elec.finalElectricityAmount,
                 calculatedTenantWater = water.finalWaterAmount,
-                calculatedTotalAmount = total,
-                paidAmount = if (tempBill.paymentStatus == "PAID") total else tempBill.paidAmount
+                calculatedTotalAmount = currentCharges,
+                paidAmount = calculatedPaidAmount,
+                paymentStatus = calculatedStatus,
+                paymentDate = if (calculatedStatus != "PENDING") System.currentTimeMillis() else null
             )
 
             repository.saveBill(finalBill)
@@ -396,10 +430,34 @@ class RentViewModel(private val repository: RentRepository) : ViewModel() {
 
     fun updatePaymentStatus(bill: MonthlyBill, status: String, paidAmt: Double) {
         viewModelScope.launch {
+            val summary = getSummaryForBill(bill.id)
+            val totalOutstanding = summary?.totalOutstanding ?: bill.calculatedTotalAmount
+            
+            val updatedPaidAmount = if (status == "PAID") totalOutstanding else paidAmt
+            val updatedStatus = when {
+                updatedPaidAmount >= totalOutstanding -> "PAID"
+                updatedPaidAmount > 0.0 -> "PARTIAL"
+                else -> "PENDING"
+            }
+
+            val updated = bill.copy(
+                paymentStatus = updatedStatus,
+                paidAmount = updatedPaidAmount,
+                paymentDate = if (updatedStatus != "PENDING") System.currentTimeMillis() else null,
+                paymentMethod = if (updatedStatus != "PENDING") "Cash" else bill.paymentMethod
+            )
+            repository.saveBill(updated)
+        }
+    }
+
+    fun updateBillPaymentDetails(bill: MonthlyBill, status: String, paidAmt: Double, method: String, notes: String) {
+        viewModelScope.launch {
             val updated = bill.copy(
                 paymentStatus = status,
-                paidAmount = if (status == "PAID") bill.calculatedTotalAmount else paidAmt,
-                paymentDate = if (status == "PAID") System.currentTimeMillis() else null
+                paidAmount = paidAmt,
+                paymentMethod = method,
+                notes = notes,
+                paymentDate = if (status != "PENDING") System.currentTimeMillis() else null
             )
             repository.saveBill(updated)
         }
@@ -437,7 +495,60 @@ class RentViewModel(private val repository: RentRepository) : ViewModel() {
             append("\nGenerated via *RentEase* App")
         }
     }
+
+    fun getPaymentSummariesForTenant(tenantId: Long, allBillsList: List<MonthlyBill> = bills.value): Map<Long, BillPaymentSummary> {
+        val tenantBills = allBillsList.filter { it.tenantId == tenantId }.sortedBy { it.billMonth }
+        val summaries = mutableMapOf<Long, BillPaymentSummary>()
+        var accumulatedPending = 0.0
+        for (bill in tenantBills) {
+            val prevPending = accumulatedPending
+            val currentCharges = bill.calculatedTotalAmount
+            val totalOutstanding = currentCharges + prevPending
+            val paidAmt = bill.paidAmount
+            val remainingDue = if (totalOutstanding > paidAmt) totalOutstanding - paidAmt else 0.0
+            
+            summaries[bill.id] = BillPaymentSummary(
+                billId = bill.id,
+                currentCharges = currentCharges,
+                previousPending = prevPending,
+                totalOutstanding = totalOutstanding,
+                paidAmount = paidAmt,
+                remainingDue = remainingDue
+            )
+            accumulatedPending = remainingDue
+        }
+        return summaries
+    }
+
+    fun getSummaryForBill(billId: Long): BillPaymentSummary? {
+        val bill = bills.value.find { it.id == billId } ?: return null
+        val summaries = getPaymentSummariesForTenant(bill.tenantId)
+        return summaries[billId]
+    }
+
+    fun getPreviousPendingDues(tenantId: Long, beforeMonth: String): Double {
+        val tenantBills = bills.value.filter { it.tenantId == tenantId && it.billMonth < beforeMonth }
+        val sortedBills = tenantBills.sortedBy { it.billMonth }
+        var accumulatedPending = 0.0
+        for (bill in sortedBills) {
+            val prevPending = accumulatedPending
+            val currentCharges = bill.calculatedTotalAmount
+            val totalOutstanding = currentCharges + prevPending
+            val paidAmt = bill.paidAmount
+            accumulatedPending = if (totalOutstanding > paidAmt) totalOutstanding - paidAmt else 0.0
+        }
+        return accumulatedPending
+    }
 }
+
+data class BillPaymentSummary(
+    val billId: Long,
+    val currentCharges: Double,
+    val previousPending: Double,
+    val totalOutstanding: Double,
+    val paidAmount: Double,
+    val remainingDue: Double
+)
 
 class RentViewModelFactory(private val repository: RentRepository) : ViewModelProvider.Factory {
     override fun <T : ViewModel> create(modelClass: Class<T>): T {

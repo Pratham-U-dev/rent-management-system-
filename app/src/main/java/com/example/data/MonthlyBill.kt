@@ -47,7 +47,8 @@ data class MonthlyBill(
     
     // Payment Status tracking
     val paidAmount: Double = 0.0,
-    val paymentStatus: String = "PENDING", // "PENDING", "PAID"
+    val paymentStatus: String = "PENDING", // "PENDING", "PAID", "PARTIAL"
     val paymentDate: Long? = null,
-    val notes: String = ""
+    val notes: String = "",
+    val paymentMethod: String = "Cash" // "Cash", "UPI", "Bank Transfer", "Other"
 )
