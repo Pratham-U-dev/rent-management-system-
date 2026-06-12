@@ -1,12 +1,3 @@
-<div align="center">
-  <img width="1200" height="475" alt="Rent Management System Banner" src="https://ai.google.dev/static/site-assets/images/share-ais-513315318.png" />
-
-  # Rent Management System
-
-  An Android application built to simplify rental property management, tenant billing, and monthly utility charge calculation.
-</div>
-
----
 
 ## Overview
 
