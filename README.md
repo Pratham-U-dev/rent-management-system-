@@ -8,7 +8,7 @@ The app helps with:
 - Monthly **rent calculation**
 - **Electricity bill** calculation using submeter readings
 - **Water bill** calculation
-- **AI-powered assistance** using the **Gemini API**
+
 
 This project is useful for managing rental properties where utility usage and tenant-wise billing need to be handled in an organized and efficient way.
 
@@ -42,7 +42,6 @@ This project is useful for managing rental properties where utility usage and te
 | Platform | Android |
 | Language | Kotlin |
 | IDE | Android Studio |
-| AI Integration | Gemini API |
 
 ---
 
@@ -66,7 +65,7 @@ Before running the project, make sure you have:
 
 - **Android Studio** installed
 - A working **Android emulator** or a physical Android device
-- A valid **Gemini API key**
+
 
 ---
 
@@ -130,20 +129,6 @@ A landlord can:
 
 This makes monthly billing more organized and easier to handle.
 
----
-
-## AI Integration
-
-This project includes **Gemini API** integration for AI-powered assistance.
-
-Depending on implementation, this can help with:
-
-- Smart suggestions
-- User assistance
-- Billing-related guidance
-- Improved app interaction
-
-> Make sure your Gemini API key is properly configured in the `.env` file before running the app.
 
 ---
 
@@ -188,4 +173,4 @@ This project is intended for **educational and learning purposes** unless stated
 
 ## Author
 
-**Pratham**  
+**Pratham U**  
