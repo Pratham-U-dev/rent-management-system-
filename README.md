@@ -147,8 +147,6 @@ rent-management-system-/
 └── ...
 ```
 
-> Update this section if you want to reflect the exact folder and file structure from your repository.
-
 ---
 
 ## Learning Outcomes
